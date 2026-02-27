@@ -1,10 +1,11 @@
 package bot.majestic;
 
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 
 public class Reload implements CommandExecutor {
 
@@ -30,6 +31,7 @@ public class Reload implements CommandExecutor {
       return true;
     }
 
+    this.plugin.reloadConfig();
     this.plugin.loadConfigData();
     sender.sendMessage(
         Component.text("Successfully reloaded the configuration!", NamedTextColor.GREEN));
