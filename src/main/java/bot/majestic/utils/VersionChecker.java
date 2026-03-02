@@ -1,5 +1,6 @@
-package bot.majestic;
+package bot.majestic.utils;
 
+import bot.majestic.MajesticBot;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -95,28 +96,19 @@ public class VersionChecker {
     }
   }
 
-  /**
-   * Call this from the PlayerJoin event. Sends a clickable update notification to OP players when a
-   * newer version is available.
-   */
   public void notifyIfOutdated(Player player) {
     if (!updateAvailable || !player.isOp()) return;
 
     player.sendMessage(
-        Component.text("[MajesticBot] ", NamedTextColor.GOLD, TextDecoration.BOLD)
+        Component.text("[MajesticBot] ", NamedTextColor.GOLD)
             .append(Component.text("A new version is available: ", NamedTextColor.YELLOW))
-            .append(Component.text(latestVersion, NamedTextColor.GREEN, TextDecoration.BOLD))
+            .append(Component.text(latestVersion, NamedTextColor.GREEN))
             .append(Component.text(" — ", NamedTextColor.YELLOW))
             .append(
                 Component.text("[Download]", NamedTextColor.AQUA, TextDecoration.UNDERLINED)
                     .clickEvent(ClickEvent.openUrl(downloadUrl))));
   }
 
-  /**
-   * Compare two semver-style version strings (e.g. "1.2.0" vs "1.1.3").
-   *
-   * @return true if candidate is strictly newer than current
-   */
   private boolean isNewer(String candidate, String current) {
     int[] c = parseVersion(candidate);
     int[] v = parseVersion(current);

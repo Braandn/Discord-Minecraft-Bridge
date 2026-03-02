@@ -1,18 +1,77 @@
+# ─────────────────────────────────────────────────
+#  MajesticBot — Minecraft Discord Integration
+#  https://majestic.bot
+# ─────────────────────────────────────────────────
+
+# Display name for your server (shown in embed footers)
 server_name: 'Minecraft'
 
+# API credentials — generate at:
+# https://majestic.bot/server/YOUR_DISCORD_SERVER_ID/minecraft
 majestic:
   api_url: 'https://api.majestic.bot/v1/minecraft/webhook'
   api_key: 'YOUR_API_KEY_HERE'
   api_secret: 'YOUR_API_SECRET_HERE'
 
-events:
-  player_chat: true
-  player_join: true
-  player_leave: true
-  player_death: true
+# ─────────────────────────────────────────────────
+#  Events
+# ─────────────────────────────────────────────────
+#  Each event has three settings:
+#    enabled  — whether to send this event to Discord
+#    color    — hex color for the Discord embed
+#    message  — custom message template (see variables below)
+#
+#  Available variables:
+#    %player_name%     — player's in-game name
+#    %player_uuid%     — player's UUID
+#    %message%         — chat message (player_chat only)
+#    %death_message%   — vanilla death text (player_death only)
+#    %advancement%     — advancement name (player_advancement only)
+#    %server_name%     — this server's name (see above)
+#    %online_players%  — current online player count
+#    %max_players%     — max player slots
+# ─────────────────────────────────────────────────
 
-colors:
-  player_chat: '#0080FF'
-  player_join: '#00FF00'
-  player_leave: '#FF0000'
-  player_death: '#757575'
+events:
+
+  # Fired when the server finishes starting
+  server_start:
+    enabled: true
+    color: '#FFFFFF'
+    message: 'The server is now online!'
+
+  # Fired when the server shuts down
+  server_stop:
+    enabled: true
+    color: '#FF0000'
+    message: 'The server has been stopped.'
+
+  # Fired when a player sends a chat message
+  player_chat:
+    enabled: true
+    color: '#0080FF'
+    message: '%message%'
+
+  # Fired when a player joins the server
+  player_join:
+    enabled: true
+    color: '#00FF00'
+    message: '%player_name% joined the server'
+
+  # Fired when a player leaves the server
+  player_leave:
+    enabled: true
+    color: '#FF0000'
+    message: '%player_name% left the server'
+
+  # Fired when a player dies
+  player_death:
+    enabled: true
+    color: '#757575'
+    message: '%death_message%'
+
+  # Fired when a player earns an advancement (Paper only)
+  player_advancement:
+    enabled: true
+    color: '#FF9AFF'
+    message: '%player_name% has made the advancement %advancement%'
