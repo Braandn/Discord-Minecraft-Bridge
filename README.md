@@ -1,7 +1,7 @@
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.17.1_--_1.21.11-brightgreen)
 ![Java](https://img.shields.io/badge/Java-17%2F21-orange)
-![Releases](https://img.shields.io/github/v/release/Braandn/Majestic-Bot-Minecraft-Integration)
-![License](https://img.shields.io/github/license/Braandn/Majestic-Bot-Minecraft-Integration)
+![Releases](https://img.shields.io/github/v/release/Braandn/Discord-Minecraft-Bridge)
+![License](https://img.shields.io/github/license/Braandn/Discord-Minecraft-Bridge)
 
 # MajesticBot - Minecraft Discord Integration Plugin
 
@@ -27,7 +27,7 @@ MajesticBot is a lightweight Bukkit/Spigot/Paper plugin that bridges your Minecr
 
 ## Installation
 
-1. Download the JAR for your Minecraft version from the [Releases page](https://github.com/Braandn/Majestic-Bot-Minecraft-Integration/releases).
+1. Download the JAR for your Minecraft version from the [Releases page](https://github.com/Braandn/Discord-Minecraft-Bridge/releases).
 2. Drop it into your server's `plugins/` directory.
 3. Start the server - it will generate `plugins/MajesticBot/config.yml`.
 4. Follow the setup guide for your chosen mode below.

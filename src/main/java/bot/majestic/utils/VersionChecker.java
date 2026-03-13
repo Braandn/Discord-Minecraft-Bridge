@@ -19,7 +19,7 @@ import net.kyori.adventure.text.format.TextDecoration;
 
 public class VersionChecker {
 
-  private static final String GITHUB_REPO = "Braandn/Majestic-Bot-Minecraft-Integration";
+  private static final String GITHUB_REPO = "Braandn/Discord-Minecraft-Bridge";
   private static final String API_URL =
       "https://api.github.com/repos/" + GITHUB_REPO + "/releases/latest";
 
@@ -105,7 +105,7 @@ public class VersionChecker {
         Component.text("", NamedTextColor.GOLD)
             .append(Component.text("A new version is available: ", NamedTextColor.YELLOW))
             .append(Component.text(latestVersion, NamedTextColor.GREEN))
-            .append(Component.text(" — ", NamedTextColor.YELLOW))
+            .append(Component.text(" - ", NamedTextColor.YELLOW))
             .append(
                 Component.text("[Download]", NamedTextColor.AQUA, TextDecoration.UNDERLINED)
                     .clickEvent(ClickEvent.openUrl(downloadUrl))));
