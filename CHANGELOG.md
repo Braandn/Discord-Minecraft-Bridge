@@ -2,6 +2,11 @@
 
 All notable changes to MajesticBot will be documented in this file.
 
+## [3.0.1] - 2026-03-13
+
+### Changed
+- `VersionChecker.GITHUB_REPO` Repo Url.
+
 ## [3.0.0] - 2026-03-11
 
 ### ⚠️ Breaking Changes
