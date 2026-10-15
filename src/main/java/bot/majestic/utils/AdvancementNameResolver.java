@@ -1,5 +1,8 @@
 package bot.majestic.utils;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.bukkit.advancement.Advancement;
 
 /**
@@ -98,6 +101,82 @@ public final class AdvancementNameResolver {
       // Method doesn't exist on this version; rely on key-based filtering only
     }
     return false;
+  }
+
+  /**
+   * The advancement's description as plain text, or an empty string when the server exposes none.
+   * Paper returns a Component from {@code description()}, Spigot a String from {@code
+   * getDescription()}.
+   */
+  public static String description(Advancement advancement) {
+    Object display = display(advancement);
+    if (display == null) return "";
+    Object value = invoke(display, "description");
+    if (value == null) value = invoke(display, "getDescription");
+    return plain(value);
+  }
+
+  /**
+   * The advancement's frame, {@code task}, {@code goal} or {@code challenge}, defaulting to {@code
+   * task}. Paper names it {@code frame()}, Spigot {@code getType()}.
+   */
+  public static String frame(Advancement advancement) {
+    Object display = display(advancement);
+    if (display == null) return "task";
+    Object value = invoke(display, "frame");
+    if (value == null) value = invoke(display, "getType");
+    String name = value instanceof Enum<?> e ? e.name().toLowerCase() : "";
+    return switch (name) {
+      case "goal", "challenge" -> name;
+      default -> "task";
+    };
+  }
+
+  private static Object display(Advancement advancement) {
+    return invoke(advancement, "getDisplay");
+  }
+
+  /**
+   * Calls a no-argument method through the public API interface that declares it, since the
+   * implementation class behind it (often a record) may not be accessible.
+   */
+  private static Object invoke(Object target, String method) {
+    List<Class<?>> types = new ArrayList<>();
+    collectInterfaces(target.getClass(), types);
+    types.add(target.getClass());
+    for (Class<?> type : types) {
+      try {
+        return type.getMethod(method).invoke(target);
+      } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
+      }
+    }
+    return null;
+  }
+
+  private static void collectInterfaces(Class<?> type, List<Class<?>> out) {
+    for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+      for (Class<?> iface : current.getInterfaces()) {
+        if (!out.contains(iface)) {
+          out.add(iface);
+          collectInterfaces(iface, out);
+        }
+      }
+    }
+  }
+
+  private static String plain(Object value) {
+    if (value == null) return "";
+    if (value instanceof String s) return s.replaceAll("(?i)§[0-9A-FK-ORX]", "").trim();
+    try {
+      Class<?> serializer =
+          Class.forName("net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer");
+      Object instance = serializer.getMethod("plainText").invoke(null);
+      Class<?> component = Class.forName("net.kyori.adventure.text.Component");
+      return String.valueOf(serializer.getMethod("serialize", component).invoke(instance, value))
+          .trim();
+    } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
+      return "";
+    }
   }
 
   // ── Strategy implementations ──────────────────────────────────────

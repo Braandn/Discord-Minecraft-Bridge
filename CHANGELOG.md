@@ -2,6 +2,38 @@
 
 All notable changes to MajesticBot will be documented in this file.
 
+## [4.0.0] - 2026-10-15
+
+### ⚠️ Breaking Changes
+- **Paper (or a Paper fork such as Purpur) is now required.** Earlier versions already relied on Paper-only APIs for chat relay, kicks and TPS; 4.0.0 says so and uses Paper's chat and death events directly.
+- **New jar for Minecraft 26.x** (`majesticbot-4.0.0_26.3.jar`), built against Paper 26.3 with **Java 25**. It runs on 26.1, 26.2 and 26.3. The 1.17.1 to 1.21.11 jars are still built (Java 17 / 21).
+
+### Added
+- **Protocol 2 frames.** Events now carry structured data next to the message: player counts, first join, session length on leave, the Minecraft version on start, and the advancement's title, description and frame (task, goal, challenge). Older Majestic API versions ignore the extra fields.
+- **Redesigned Discord cards** in both modes, matching the rest of Majestic: a coloured card with a heading, detail rows, the player's head and a server footer, instead of the old embeds.
+- **Webhook mode uses Discord's new message components** and posts player chat under the player's own name and head, like a native chat line.
+- **`/minecraft unban`** (Discord) and a matching `discord_commands.unban` config section.
+- **`/minecraft info` returns a full server card**: players online with names, version, TPS with a health dot, whitelist state and MOTD.
+- **`/majestic status`** shows the mode, whether the socket is connected and the last error. `/majestic` now tab-completes.
+- **Discord → Minecraft chat** shows the sender in their Discord role colour, with a hover showing their username and who they replied to, a reply marker, mentions as names, and an `[attachment]` note for files.
+- **`update_checker`** config option and the `majestic.update`, `majestic.status` permissions.
+
+### Changed
+- **Colours default to Majestic's palette.** `color: ''` lets Majestic pick the event's colour (advancements by frame); any hex you set still wins.
+- **Server start is sent once the server has finished loading** (`ServerLoadEvent`), not while plugins are still enabling.
+- **Chat and death events run at MONITOR and skip cancelled events**, so messages a mute or chat plugin blocked never reach Discord.
+- **Ban, unban and whitelist add/remove use the vanilla commands** and report the state read back afterwards, so a typo in a name now fails instead of reporting success. Player names are validated (Floodgate's `.` prefix included) and reasons are sanitised.
+- **WebSocket reliability:** sends are serialised (bursts of chat no longer throw), reconnects back off from 5 s to 2 min with jitter (5 min after rejected credentials), a 30 s ping keeps idle connections alive through proxies, at most 500 events queue while offline, and API rejections (such as "no channel configured") are logged once.
+- **Webhook deliveries** run in order on one thread and honour Discord's rate limit once.
+- **JSON** is parsed and written by a real (dependency-free) parser instead of string searching.
+- The plugin version in `plugin.yml` now comes from the build, so the update checker compares the right version.
+- `allowed_role_ids` / `allowed_user_ids` accept unquoted IDs.
+
+### Fixed
+- Discord users could use `&` colour codes in relayed messages; their text is now shown as typed.
+- `discord_commands` permissions were never applied on the Discord side because the Majestic API did not keep them; they are now stored and enforced by the bot as documented.
+
+
 ## [3.0.1] - 2026-03-13
 
 ### Changed

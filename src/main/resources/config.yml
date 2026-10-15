@@ -3,18 +3,22 @@
 #  https://majestic.bot
 # ─────────────────────────────────────────────────
 
-# Display name for your server (shown in embed footers / Discord)
+# Display name for your server (shown in the footer of every Discord card)
 server_name: ''
+
+# Check GitHub once a day for a newer plugin version and tell players with
+# the majestic.update permission (ops by default) when they join.
+update_checker: true
 
 # ─────────────────────────────────────────────────
 #  Connection mode - choose ONE
 #
 #  websocket  Two-way bridge via the Majestic API.
-#             Minecraft events → Discord embeds (handled by Majestic)
+#             Minecraft events → Discord cards (posted by Majestic)
 #             Discord messages → Minecraft chat (relayed in-game)
 #             Requires: ws_url, api_key, api_secret
 #
-#  webhook    One-way Discord embeds sent directly to a bare Discord
+#  webhook    One-way Discord cards sent directly to a bare Discord
 #             webhook URL. Majestic Bot not required.
 #             Requires: webhook_url
 #             Note: discord_chat relay is not available in this mode.
@@ -25,7 +29,7 @@ majestic:
 
   # ── WebSocket mode ──────────────────────────────
   # Generate credentials at:
-  # https://majestic.bot/server/YOUR_DISCORD_SERVER_ID/minecraft
+  # https://dash.majestic.bot/YOUR_DISCORD_SERVER_ID/minecraft
   ws_url: 'wss://api.majestic.bot/v1/minecraft/websocket'
   api_key: 'YOUR_API_KEY_HERE'
   api_secret: 'YOUR_API_SECRET_HERE'
@@ -40,12 +44,17 @@ majestic:
 #  When a Discord user sends a message in the linked channel it is
 #  relayed into Minecraft chat using the format below.
 #
-#  Supports & color/formatting codes (e.g. &9, &l, &r).
+#  Supports & color/formatting codes (e.g. &9, &l, &r) in the format
+#  itself. Codes typed by Discord users are shown as plain text.
 #
 #  Available variables:
-#    %discord_user%  - Discord display name
-#    %discord_tag%   - Full Discord tag (user#0000 or username)
-#    %message%       - Message content
+#    %discord_user%  - Discord display name, in their role colour.
+#                      Hover it to see their username and who they
+#                      replied to.
+#    %discord_tag%   - Discord username
+#    %message%       - Message content, with mentions shown as names,
+#                      a reply marker and an [attachment] note
+#                      when the message had files
 # ─────────────────────────────────────────────────
 
 discord_chat:
@@ -59,13 +68,16 @@ discord_chat:
 #  Each command can be toggled on/off individually.
 #
 #  Permissions - list Discord role or user IDs that may invoke
-#  each command. Leave both lists empty to allow everyone.
+#  each command. With both lists empty, only members with Manage
+#  Server can use the command (info stays open to everyone).
+#  IDs may be written with or without quotes.
 #  These lists are transmitted to the Majestic bot on connect
 #  (and on /majestic reload) so the bot enforces them on the
 #  Discord side before forwarding the command here.
 #
 #  Supported commands:
 #    ban       - permanently ban a player (and kick if online)
+#    unban     - lift a ban
 #    kick      - kick an online player
 #    whitelist - on / off / add <player> / remove <player>
 #    info      - display server info (players, version, TPS)
@@ -80,6 +92,11 @@ discord_commands:
     enabled: false
     allowed_role_ids: []  # [123456789012345678]
     allowed_user_ids: []  # [987654321098765432, 847654321098765290]
+
+  unban:
+    enabled: false
+    allowed_role_ids: []
+    allowed_user_ids: []
 
   kick:
     enabled: false
@@ -101,8 +118,12 @@ discord_commands:
 # ─────────────────────────────────────────────────
 #  Each event has three settings:
 #    enabled  - whether to send this event to Discord
-#    color    - hex color for the Discord embed
-#    message  - custom message template (see variables below)
+#    color    - hex colour for the card's accent bar, e.g. '#22C55E'.
+#               Leave it empty ('') to use Majestic's colour for the
+#               event (advancements are coloured by their frame).
+#    message  - the card's heading (see variables below). Player counts,
+#               session length and advancement details are added to the
+#               card automatically.
 #
 #  Available variables:
 #    %player_name%     - player's in-game name
@@ -120,41 +141,41 @@ events:
   # Fired when the server finishes starting
   server_start:
     enabled: true
-    color: '#FFFFFF'
+    color: ''
     message: 'The server is now online!'
 
   # Fired when the server shuts down
   server_stop:
     enabled: true
-    color: '#FF0000'
+    color: ''
     message: 'The server has been stopped.'
 
   # Fired when a player sends a chat message
   player_chat:
     enabled: true
-    color: '#0080FF'
+    color: ''
     message: '%message%'
 
   # Fired when a player joins the server
   player_join:
     enabled: true
-    color: '#00FF00'
+    color: ''
     message: '%player_name% joined the server'
 
   # Fired when a player leaves the server
   player_leave:
     enabled: true
-    color: '#FF0000'
+    color: ''
     message: '%player_name% left the server'
 
   # Fired when a player dies
   player_death:
     enabled: true
-    color: '#757575'
+    color: ''
     message: '%death_message%'
 
   # Fired when a player earns an advancement
   player_advancement:
     enabled: true
-    color: '#FF9AFF'
+    color: ''
     message: '%player_name% has made the advancement %advancement%'
