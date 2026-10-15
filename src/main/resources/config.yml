@@ -68,7 +68,8 @@ discord_chat:
 #  Each command can be toggled on/off individually.
 #
 #  Permissions - list Discord role or user IDs that may invoke
-#  each command. Leave both lists empty to allow everyone.
+#  each command. With both lists empty, only members with Manage
+#  Server can use the command (info stays open to everyone).
 #  IDs may be written with or without quotes.
 #  These lists are transmitted to the Majestic bot on connect
 #  (and on /majestic reload) so the bot enforces them on the

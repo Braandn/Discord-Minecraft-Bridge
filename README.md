@@ -124,7 +124,7 @@ discord_commands:
 
   info:
     enabled: true
-    allowed_role_ids: []   # Empty = anyone in the Discord server can use it
+    allowed_role_ids: []   # Empty: info stays open to everyone
     allowed_user_ids: []
 ```
 
@@ -133,7 +133,7 @@ To get a role or user ID: enable **Developer Mode** in Discord (User Settings â†
 | Permission configuration | Behavior |
 |---|---|
 | `enabled: false` | Command is fully disabled and not visible in Discord |
-| `enabled: true`, both lists empty | Anyone in the Discord server can use it |
+| `enabled: true`, both lists empty | Members with **Manage Server** can use it; `info` stays open to everyone |
 | `enabled: true`, lists populated | Only matching role/user IDs can use it |
 
 ### Step 4 - (Optional) Configure Discord â†’ Minecraft chat format
