@@ -7,6 +7,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -27,9 +28,9 @@ public class VersionChecker {
 
   private final MajesticBot plugin;
 
-  private String latestVersion = null;
-  private String downloadUrl = null;
-  private boolean updateAvailable = false;
+  private volatile String latestVersion = null;
+  private volatile String downloadUrl = null;
+  private volatile boolean updateAvailable = false;
 
   public VersionChecker(MajesticBot plugin) {
     this.plugin = plugin;
@@ -45,6 +46,7 @@ public class VersionChecker {
       HttpURLConnection con = (HttpURLConnection) new URI(API_URL).toURL().openConnection();
       con.setRequestMethod("GET");
       con.setRequestProperty("Accept", "application/vnd.github+json");
+      con.setRequestProperty("User-Agent", "MajesticBot-Minecraft/" + ServerInfo.pluginVersion());
       con.setConnectTimeout(5000);
       con.setReadTimeout(5000);
 
@@ -64,11 +66,11 @@ public class VersionChecker {
       }
       con.disconnect();
 
-      String json = response.toString();
-      String tagName = extractJsonField(json, "tag_name");
-      String htmlUrl = extractJsonField(json, "html_url");
+      Map<String, Object> json = Json.parseObject(response.toString());
+      String tagName = Json.string(json, "tag_name");
+      String htmlUrl = Json.string(json, "html_url");
 
-      if (tagName == null || htmlUrl == null) {
+      if (tagName.isEmpty() || htmlUrl.isEmpty()) {
         plugin.getLogger().warning("Could not parse GitHub release response.");
         return;
       }
@@ -76,7 +78,7 @@ public class VersionChecker {
       latestVersion = tagName.startsWith("v") ? tagName.substring(1) : tagName;
       downloadUrl = htmlUrl;
 
-      String currentVersion = plugin.getDescription().getVersion();
+      String currentVersion = ServerInfo.pluginVersion();
       updateAvailable = isNewer(latestVersion, currentVersion);
 
       if (updateAvailable) {
@@ -99,7 +101,7 @@ public class VersionChecker {
   }
 
   public void notifyIfOutdated(Player player) {
-    if (!updateAvailable || !player.isOp()) return;
+    if (!updateAvailable) return;
 
     player.sendMessage(
         Component.text("", NamedTextColor.GOLD)
@@ -134,22 +136,5 @@ public class VersionChecker {
       }
     }
     return nums;
-  }
-
-  private String extractJsonField(String json, String field) {
-    String key = "\"" + field + "\"";
-    int keyIndex = json.indexOf(key);
-    if (keyIndex == -1) return null;
-
-    int colonIndex = json.indexOf(':', keyIndex + key.length());
-    if (colonIndex == -1) return null;
-
-    int openQuote = json.indexOf('"', colonIndex + 1);
-    if (openQuote == -1) return null;
-
-    int closeQuote = json.indexOf('"', openQuote + 1);
-    if (closeQuote == -1) return null;
-
-    return json.substring(openQuote + 1, closeQuote);
   }
 }

@@ -3,6 +3,8 @@ on:
   push:
     tags:
       - 'v*'
+  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,8 +13,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
+          # One jar per line, built against the newest API of that line. Paper 26.x numbers
+          # builds as <version>.build.<n>-<channel>, so the range picks the newest build of 26.3.
+          - paper_version: '[26.3.build,26.4)'
+            mc_version: '26.3'
+            java_version: '25'
           - paper_version: '1.21.11-R0.1-SNAPSHOT'
             mc_version: '1.21.11'
             java_version: '21'
@@ -31,41 +39,50 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Set up JDK ${{ matrix.java_version }}
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v5
       with:
         java-version: ${{ matrix.java_version }}
         distribution: 'temurin'
         cache: maven
 
+    - name: Resolve version
+      id: version
+      run: |
+        if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+          echo "revision=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        else
+          echo "revision=0.0.0-SNAPSHOT" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Build with Maven
       run: >
-        mvn clean package
-        -Dpaper.version=${{ matrix.paper_version }}
+        mvn -B clean package
+        "-Dpaper.version=${{ matrix.paper_version }}"
         -Dmc.version=${{ matrix.mc_version }}
         -Djava.version=${{ matrix.java_version }}
-        -Drevision=${GITHUB_REF_NAME#v}
+        -Drevision=${{ steps.version.outputs.revision }}
 
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: jar-${{ matrix.paper_version }}
+        name: jar-${{ matrix.mc_version }}
         path: target/majesticbot-*.jar
         if-no-files-found: error
 
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v5
 
     - name: Extract changelog for this version
-      id: changelog
       run: |
-        # Extract everything between the first ## [x.y.z] header and the next one
+        # Everything between the first "## [x.y.z]" header and the next one.
         awk '/^## \[/{if(found) exit; found=1; next} found' CHANGELOG.md > release_notes.md
         cat release_notes.md
 

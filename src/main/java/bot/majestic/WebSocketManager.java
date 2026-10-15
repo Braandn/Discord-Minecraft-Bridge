@@ -3,69 +3,73 @@ package bot.majestic;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Queue;
+import java.net.http.WebSocketHandshakeException;
+import java.nio.ByteBuffer;
+import java.time.Duration;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.bukkit.Bukkit;
-
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
+import bot.majestic.utils.Json;
+import bot.majestic.utils.ServerInfo;
 
 /**
- * Manages the persistent WebSocket connection to the Majestic API.
+ * The persistent connection to the Majestic API.
  *
- * <p><b>Outbound</b>: Minecraft events are serialised to JSON and sent over the socket.
- * {@code RegisterCommands} is sent on every successful open so the Majestic bot knows which
- * Discord commands are enabled and who may invoke them.
+ * <p>Outbound, Minecraft events go out as JSON frames and {@code RegisterCommands} is sent on every
+ * open. Inbound, {@code DiscordMessage} frames are shown in chat and {@code DiscordCommand} frames
+ * run through {@link DiscordCommandExecutor}. Credentials travel as handshake headers only.
  *
- * <p><b>Inbound</b>:
- *
- * <ul>
- *   <li>{@code DiscordMessage} - broadcast into Minecraft chat.
- *   <li>{@code DiscordCommand} - executed on the Bukkit main thread via
- *       {@link DiscordCommandExecutor}.
- * </ul>
- *
- * <p>Authentication is performed during the WebSocket handshake via the {@code X-Api-Key} and
- * {@code X-Api-Secret} HTTP headers.
+ * <p>Java's WebSocket allows one outstanding send at a time, so every send is chained onto the
+ * previous one rather than issued from whichever thread produced it.
  */
-public class WebSocketManager {
+public final class WebSocketManager {
 
-  private static final int RECONNECT_DELAY_SECONDS = 15;
+  private static final long MIN_BACKOFF_SECONDS = 5;
+  private static final long MAX_BACKOFF_SECONDS = 120;
+  private static final long AUTH_BACKOFF_SECONDS = 300;
+  private static final long PING_INTERVAL_SECONDS = 30;
   private static final int SYNC_WAIT_MS = 5000;
+  private static final int MAX_QUEUED = 500;
 
   private final MajesticBot plugin;
   private final String wsUrl;
   private final String apiKey;
   private final String apiSecret;
 
-  private volatile WebSocket webSocket;
+  private final HttpClient httpClient;
+  private final ScheduledExecutorService scheduler;
+  private final DiscordCommandExecutor commandExecutor;
+  private final ChatRelay chatRelay;
+
   private final AtomicBoolean connected = new AtomicBoolean(false);
   private final AtomicBoolean shutdown = new AtomicBoolean(false);
+  private final ConcurrentLinkedDeque<String> pendingQueue = new ConcurrentLinkedDeque<>();
 
-  /** Messages queued while the connection is being established. */
-  private final Queue<String> pendingQueue = new ConcurrentLinkedQueue<>();
-
-  private final ScheduledExecutorService scheduler;
-  private final HttpClient httpClient;
-  private final DiscordCommandExecutor commandExecutor;
+  private volatile WebSocket webSocket;
+  private volatile long connectedSince;
+  private volatile String lastError = "";
+  private long backoffSeconds = MIN_BACKOFF_SECONDS;
+  private CompletableFuture<?> sendChain = CompletableFuture.completedFuture(null);
+  private ScheduledFuture<?> pingTask;
+  private boolean warnedQueueFull;
 
   public WebSocketManager(MajesticBot plugin, String wsUrl, String apiKey, String apiSecret) {
     this.plugin = plugin;
-    this.wsUrl = wsUrl;
-    this.apiKey = apiKey;
-    this.apiSecret = apiSecret;
-    this.httpClient = HttpClient.newHttpClient();
+    this.wsUrl = wsUrl == null ? "" : wsUrl.trim();
+    this.apiKey = apiKey == null ? "" : apiKey.trim();
+    this.apiSecret = apiSecret == null ? "" : apiSecret.trim();
+    this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     this.commandExecutor = new DiscordCommandExecutor(plugin, this);
+    this.chatRelay = new ChatRelay(plugin);
     this.scheduler =
         Executors.newSingleThreadScheduledExecutor(
             r -> {
@@ -75,7 +79,7 @@ public class WebSocketManager {
             });
   }
 
-  /** Returns {@code true} if the config holds real (non-placeholder) credentials. */
+  /** Whether config.yml holds real, non-placeholder credentials. */
   public boolean isConfigured() {
     return !wsUrl.isEmpty()
         && !apiKey.isEmpty()
@@ -84,18 +88,33 @@ public class WebSocketManager {
         && !apiSecret.equals("YOUR_API_SECRET_HERE");
   }
 
-  /** Start the connection process. Logs a warning and returns early if unconfigured. */
+  public boolean isConnected() {
+    return connected.get();
+  }
+
+  public long getConnectedSince() {
+    return connectedSince;
+  }
+
+  public String getLastError() {
+    return lastError;
+  }
+
+  public int getQueuedCount() {
+    return pendingQueue.size();
+  }
+
   public void connect() {
     if (!isConfigured()) {
+      lastError = "API credentials are not configured";
       plugin
           .getLogger()
           .warning(
-              "WebSocket not started: API credentials are not configured."
-                  + " Set majestic.api_key and majestic.api_secret in config.yml.");
+              "WebSocket not started: set majestic.api_key and majestic.api_secret in config.yml.");
       return;
     }
-    plugin.getLogger().info("Connecting to WebSocket: " + wsUrl);
-    doConnect();
+    plugin.getLogger().info("Connecting to " + wsUrl);
+    scheduler.execute(this::doConnect);
   }
 
   private void doConnect() {
@@ -103,47 +122,97 @@ public class WebSocketManager {
     try {
       httpClient
           .newWebSocketBuilder()
+          .connectTimeout(Duration.ofSeconds(10))
           .header("X-Api-Key", apiKey)
           .header("X-Api-Secret", apiSecret)
+          .header("User-Agent", "MajesticBot-Minecraft/" + ServerInfo.pluginVersion())
           .buildAsync(URI.create(wsUrl), new Listener())
           .whenComplete(
               (ws, ex) -> {
-                if (ex != null) {
-                  plugin.getLogger().warning("WebSocket connection failed: " + ex.getMessage());
-                  scheduleReconnect();
-                }
+                if (ex != null) handleConnectFailure(ex);
               });
-    } catch (Exception e) {
-      plugin.getLogger().warning("WebSocket error during connect: " + e.getMessage());
-      scheduleReconnect();
+    } catch (RuntimeException e) {
+      handleConnectFailure(e);
     }
   }
 
-  private void scheduleReconnect() {
-    if (shutdown.get()) return;
-    plugin
-        .getLogger()
-        .info("Reconnecting WebSocket in " + RECONNECT_DELAY_SECONDS + " seconds…");
-    scheduler.schedule(this::doConnect, RECONNECT_DELAY_SECONDS, TimeUnit.SECONDS);
-  }
-
-  /**
-   * Send a JSON string asynchronously. If the socket is not yet open the message is queued and
-   * flushed once the connection succeeds.
-   */
-  public void send(String json) {
-    if (!isConfigured()) return;
-    if (connected.get() && webSocket != null) {
-      webSocket.sendText(json, true);
+  private void handleConnectFailure(Throwable ex) {
+    Throwable cause = ex instanceof CompletionException && ex.getCause() != null ? ex.getCause() : ex;
+    long delay = nextBackoff();
+    if (cause instanceof WebSocketHandshakeException hs) {
+      int status = hs.getResponse().statusCode();
+      String body = String.valueOf(hs.getResponse().body());
+      String message = Json.string(Json.parseObject(body), "message");
+      if (status == 401 || status == 403) {
+        lastError = "credentials rejected (HTTP " + status + ")";
+        plugin
+            .getLogger()
+            .warning(
+                "The Majestic API rejected the API key or secret. Regenerate them in the"
+                    + " dashboard and run /majestic reload.");
+        delay = AUTH_BACKOFF_SECONDS;
+      } else {
+        lastError = message.isEmpty() ? "HTTP " + status : message;
+        plugin.getLogger().warning("WebSocket handshake failed: " + lastError);
+      }
     } else {
-      pendingQueue.offer(json);
+      lastError = String.valueOf(cause.getMessage());
+      plugin.getLogger().warning("WebSocket connection failed: " + lastError);
+    }
+    scheduleReconnect(delay);
+  }
+
+  private synchronized long nextBackoff() {
+    long current = backoffSeconds;
+    backoffSeconds = Math.min(backoffSeconds * 2, MAX_BACKOFF_SECONDS);
+    return current + ThreadLocalRandom.current().nextLong(0, Math.max(1, current / 2));
+  }
+
+  private void scheduleReconnect(long delaySeconds) {
+    if (shutdown.get()) return;
+    plugin.getLogger().info("Reconnecting in " + delaySeconds + " seconds.");
+    try {
+      scheduler.schedule(this::doConnect, delaySeconds, TimeUnit.SECONDS);
+    } catch (RuntimeException ignored) {
+      // Scheduler already shut down by a reload.
     }
   }
 
-  /**
-   * Send a JSON string and block until delivery is confirmed (or the timeout expires). Used for
-   * the server-stop event so the message is not lost on shutdown.
-   */
+  /** Sends a frame, queueing it while the socket is down; the oldest frames go first if full. */
+  public void send(String json) {
+    if (!isConfigured() || shutdown.get()) return;
+    WebSocket ws = webSocket;
+    if (connected.get() && ws != null) {
+      enqueueSend(ws, json);
+      return;
+    }
+    pendingQueue.offerLast(json);
+    while (pendingQueue.size() > MAX_QUEUED) {
+      pendingQueue.pollFirst();
+      if (!warnedQueueFull) {
+        warnedQueueFull = true;
+        plugin
+            .getLogger()
+            .warning("Not connected and " + MAX_QUEUED + " events are queued; dropping the oldest.");
+      }
+    }
+  }
+
+  private synchronized CompletableFuture<?> enqueueSend(WebSocket ws, String json) {
+    sendChain =
+        sendChain
+            .handle((ok, err) -> null)
+            .thenCompose(ignored -> ws.sendText(json, true))
+            .whenComplete(
+                (ok, err) -> {
+                  if (err != null) {
+                    plugin.getLogger().warning("WebSocket send failed: " + err.getMessage());
+                  }
+                });
+    return sendChain;
+  }
+
+  /** Sends a frame and waits until it has been written, for the shutdown notice. */
   public void sendSync(String json) {
     if (!isConfigured()) return;
     long deadline = System.currentTimeMillis() + SYNC_WAIT_MS;
@@ -155,184 +224,134 @@ public class WebSocketManager {
         return;
       }
     }
-    if (!connected.get() || webSocket == null) return;
+    WebSocket ws = webSocket;
+    if (!connected.get() || ws == null) return;
     try {
-      webSocket.sendText(json, true).get();
-    } catch (InterruptedException | ExecutionException e) {
-      plugin.getLogger().warning("Failed to send synchronous message: " + e.getMessage());
+      enqueueSend(ws, json).get(SYNC_WAIT_MS, TimeUnit.MILLISECONDS);
+    } catch (Exception e) {
+      plugin.getLogger().warning("Failed to send the shutdown notice: " + e.getMessage());
     }
   }
 
-  /** Gracefully close the connection and stop the reconnect scheduler. */
+  /** Closes the connection and stops reconnecting. */
   public void disconnect() {
     shutdown.set(true);
     connected.set(false);
-    scheduler.shutdownNow();
     WebSocket ws = webSocket;
     if (ws != null) {
       try {
-        ws.sendClose(WebSocket.NORMAL_CLOSURE, "Plugin disabled").get();
-      } catch (InterruptedException | ExecutionException e) {
-        // Ignore - we're shutting down anyway.
+        ws.sendClose(WebSocket.NORMAL_CLOSURE, "Plugin disabled").get(2, TimeUnit.SECONDS);
+      } catch (Exception ignored) {
+        ws.abort();
       }
     }
+    scheduler.shutdownNow();
   }
 
-  // ─── WebSocket listener ───────────────────────────────────────────────────
+  // ─── Listener ─────────────────────────────────────────────────────────────
 
   private class Listener implements WebSocket.Listener {
 
-    private final StringBuilder messageBuffer = new StringBuilder();
+    private final StringBuilder buffer = new StringBuilder();
 
     @Override
     public void onOpen(WebSocket ws) {
       webSocket = ws;
       connected.set(true);
-      plugin.getLogger().info("WebSocket connected.");
+      connectedSince = System.currentTimeMillis();
+      lastError = "";
+      warnedQueueFull = false;
+      synchronized (WebSocketManager.this) {
+        backoffSeconds = MIN_BACKOFF_SECONDS;
+        sendChain = CompletableFuture.completedFuture(null);
+      }
+      plugin.getLogger().info("Connected to the Majestic API.");
 
-      // Flush messages queued before the connection opened.
+      enqueueSend(ws, plugin.buildCommandsJson());
       String pending;
-      while ((pending = pendingQueue.poll()) != null) {
-        ws.sendText(pending, true);
+      while ((pending = pendingQueue.pollFirst()) != null) {
+        enqueueSend(ws, pending);
       }
 
-      // Tell the Majestic bot which commands are enabled and who may use them.
-      ws.sendText(plugin.buildCommandsJson(), true);
-
+      pingTask =
+          scheduler.scheduleAtFixedRate(
+              () -> {
+                if (connected.get()) ws.sendPing(ByteBuffer.allocate(0));
+              },
+              PING_INTERVAL_SECONDS,
+              PING_INTERVAL_SECONDS,
+              TimeUnit.SECONDS);
       ws.request(1);
     }
 
     @Override
     public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
-      messageBuffer.append(data);
-      ws.request(1);
-      if (last) {
-        String frame = messageBuffer.toString();
-        messageBuffer.setLength(0);
-        handleIncoming(frame);
+      buffer.append(data);
+      if (buffer.length() > 1_000_000) {
+        buffer.setLength(0);
+        ws.abort();
+        return null;
       }
+      if (last) {
+        String frame = buffer.toString();
+        buffer.setLength(0);
+        try {
+          handleIncoming(frame);
+        } catch (RuntimeException e) {
+          plugin.getLogger().warning("Could not handle a frame from the API: " + e.getMessage());
+        }
+      }
+      ws.request(1);
       return null;
     }
 
     @Override
     public CompletionStage<?> onClose(WebSocket ws, int statusCode, String reason) {
-      plugin.getLogger().info("WebSocket closed (" + statusCode + "): " + reason);
-      if (connected.getAndSet(false)) {
-        scheduleReconnect();
-      }
+      plugin.getLogger().info("Connection closed (" + statusCode + "): " + reason);
+      lost();
       return null;
     }
 
     @Override
     public void onError(WebSocket ws, Throwable error) {
-      plugin.getLogger().warning("WebSocket error: " + error.getMessage());
+      lastError = String.valueOf(error.getMessage());
+      plugin.getLogger().warning("WebSocket error: " + lastError);
+      lost();
+    }
+
+    private void lost() {
+      if (pingTask != null) pingTask.cancel(false);
       if (connected.getAndSet(false)) {
-        scheduleReconnect();
+        scheduleReconnect(nextBackoff());
       }
     }
   }
 
-  // ─── Incoming message handling ────────────────────────────────────────────
+  // ─── Inbound ──────────────────────────────────────────────────────────────
 
   private void handleIncoming(String json) {
-    String eventType = extractField(json, "event_type");
-    if (eventType == null) return;
-
+    Map<String, Object> frame = Json.parseObject(json);
+    String eventType = Json.string(frame, "event_type");
     switch (eventType) {
-      case "DiscordMessage" -> handleDiscordMessage(json);
-      case "DiscordCommand" -> handleDiscordCommand(json);
-      default -> { /* Unknown frame types are silently ignored. */ }
-    }
-  }
-
-  private void handleDiscordMessage(String json) {
-    if (!plugin.isDiscordChatEnabled()) return;
-
-    String discordUser = orEmpty(extractField(json, "discord_user"));
-    String discordTag = orEmpty(extractField(json, "discord_tag"));
-    String message = orEmpty(extractField(json, "message"));
-
-    String formatted =
-        plugin
-            .getDiscordChatFormat()
-            .replace("%discord_user%", discordUser)
-            .replace("%discord_tag%", discordTag)
-            .replace("%message%", message);
-
-    Component component = LegacyComponentSerializer.legacyAmpersand().deserialize(formatted);
-    Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getServer().broadcast(component));
-  }
-
-  private void handleDiscordCommand(String json) {
-    String command = orEmpty(extractField(json, "command"));
-    List<String> args = extractStringArray(json, "args");
-    String discordUser = orEmpty(extractField(json, "discord_user"));
-    String discordUserId = orEmpty(extractField(json, "discord_user_id"));
-    List<String> discordRoleIds = extractStringArray(json, "discord_role_ids");
-
-    commandExecutor.handle(command, args, discordUser, discordUserId, discordRoleIds);
-  }
-
-  // ─── Helpers ──────────────────────────────────────────────────────────────
-
-  private String orEmpty(String s) {
-    return s != null ? s : "";
-  }
-
-  /**
-   * Minimal JSON string-field extractor. Handles escaped quotes inside string values.
-   */
-  private String extractField(String json, String field) {
-    String key = "\"" + field + "\"";
-    int keyIdx = json.indexOf(key);
-    if (keyIdx == -1) return null;
-    int colon = json.indexOf(':', keyIdx + key.length());
-    if (colon == -1) return null;
-    int open = json.indexOf('"', colon + 1);
-    if (open == -1) return null;
-    int close = open + 1;
-    while (close < json.length()) {
-      char c = json.charAt(close);
-      if (c == '"' && json.charAt(close - 1) != '\\') break;
-      close++;
-    }
-    if (close >= json.length()) return null;
-    return json.substring(open + 1, close).replace("\\\"", "\"").replace("\\\\", "\\");
-  }
-
-  /**
-   * Extracts a JSON string array field (e.g. {@code "args": ["a","b"]}) as a {@link List}.
-   * Returns an empty list if the field is absent or empty.
-   */
-  private List<String> extractStringArray(String json, String field) {
-    String key = "\"" + field + "\"";
-    int keyIdx = json.indexOf(key);
-    if (keyIdx == -1) return Collections.emptyList();
-    int colon = json.indexOf(':', keyIdx + key.length());
-    if (colon == -1) return Collections.emptyList();
-    int open = json.indexOf('[', colon + 1);
-    if (open == -1) return Collections.emptyList();
-    int close = json.indexOf(']', open + 1);
-    if (close == -1) return Collections.emptyList();
-
-    String content = json.substring(open + 1, close).trim();
-    if (content.isEmpty()) return Collections.emptyList();
-
-    List<String> result = new ArrayList<>();
-    int pos = 0;
-    while (pos < content.length()) {
-      int openQ = content.indexOf('"', pos);
-      if (openQ == -1) break;
-      int closeQ = openQ + 1;
-      while (closeQ < content.length()) {
-        if (content.charAt(closeQ) == '"' && content.charAt(closeQ - 1) != '\\') break;
-        closeQ++;
+      case "DiscordMessage" -> chatRelay.show(frame);
+      case "DiscordCommand" ->
+          commandExecutor.handle(
+              Json.string(frame, "command"),
+              Json.strings(frame, "args"),
+              Json.string(frame, "discord_user"),
+              Json.string(frame, "discord_user_id"),
+              Json.strings(frame, "discord_role_ids"));
+      case "" -> {
+        // An acknowledgement; only a rejection is worth surfacing.
+        if (frame.containsKey("success") && !Json.bool(frame, "success")) {
+          String message = Json.string(frame, "message");
+          if (!message.equals(lastError)) {
+            lastError = message;
+            plugin.getLogger().warning("Majestic API: " + message);
+          }
+        }
       }
-      if (closeQ >= content.length()) break;
-      result.add(
-          content.substring(openQ + 1, closeQ).replace("\\\"", "\"").replace("\\\\", "\\"));
-      pos = closeQ + 1;
+      default -> {}
     }
-    return result;
   }
 }
